@@ -23,7 +23,10 @@
     <div class="flex flex-wrap items-center gap-2">
       <!-- Tools Selector -->
       <div class="bg-slate-900 p-1 rounded-lg flex gap-1 border border-slate-700">
-        <button id="btn-pencil" class="tool-btn px-3 py-1.5 rounded-md text-sm bg-indigo-600 hover:bg-indigo-700 font-medium flex items-center gap-1" onclick="setTool('pencil')">
+        <button id="btn-select" class="tool-btn px-3 py-1.5 rounded-md text-sm bg-indigo-600 hover:bg-indigo-700 font-medium flex items-center gap-1" onclick="setTool('select')">
+          <span>👆</span> <span class="hidden md:inline">Select</span>
+        </button>
+        <button id="btn-pencil" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('pencil')">
           <span>✏️</span> <span class="hidden md:inline">Pencil</span>
         </button>
         <button id="btn-highlighter" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('highlighter')">
@@ -65,6 +68,9 @@
     <div class="flex items-center gap-2">
       <button onclick="undo()" class="px-3 py-1.5 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 font-medium flex items-center gap-1.5" title="Undo Last Change">
         <span>↩️</span> Undo
+      </button>
+      <button onclick="deleteSelected()" class="px-3 py-1.5 rounded-lg text-sm bg-rose-700/80 hover:bg-rose-600 font-medium flex items-center gap-1.5" title="Delete Selected">
+        <span>🗑️</span> Delete
       </button>
       <button onclick="copyToClipboard()" class="px-3 py-1.5 rounded-lg text-sm bg-emerald-600 hover:bg-emerald-500 font-medium flex items-center gap-1.5" title="Copy to Clipboard">
         <span>📋</span> Copy
@@ -113,16 +119,24 @@
     const placeholder = document.getElementById('placeholder');
     const canvasContainer = document.getElementById('canvas-container');
     
-    let isDrawing = false;
-    let startX = 0, startY = 0;
-    let currentTool = 'pencil';
+    let currentTool = 'select'; // Select mode is default once loaded
     let currentColor = '#ff0000';
     let currentBrushSize = 6;
     
+    let bgImage = null;
+    let elements = [];
+    let selectedElement = null;
+    let selectedHandle = null;
+    
+    let isDrawing = false;
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let dragStartX = 0, dragStartY = 0;
+    
+    let originalElementState = null;
     let undoStack = [];
-    let snapshot = null; 
 
-    // Handle Active Tool States
+    // Setup active tool UI
     function setTool(toolName) {
       currentTool = toolName;
       document.querySelectorAll('.tool-btn').forEach(btn => {
@@ -134,93 +148,143 @@
         activeBtn.classList.remove('hover:bg-slate-800');
         activeBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
       }
+      
+      if (toolName !== 'select') {
+        selectedElement = null;
+      }
+      draw();
     }
 
     function setColor(colorHex) {
       currentColor = colorHex;
+      document.getElementById('colorPicker').value = colorHex;
+      if (selectedElement) {
+        selectedElement.color = colorHex;
+        saveState();
+        draw();
+      }
     }
 
     function setBrushSize(size) {
       currentBrushSize = parseInt(size);
+      document.getElementById('brushSize').value = size;
       document.getElementById('brushSizeVal').innerText = size;
-    }
-
-    // Canvas Undo Operations
-    function saveState() {
-      undoStack.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
-      if (undoStack.length > 30) undoStack.shift(); // Limit undo stack history
-    }
-
-    function undo() {
-      if (undoStack.length > 1) {
-        undoStack.pop(); 
-        const prevState = undoStack[undoStack.length - 1];
-        ctx.putImageData(prevState, 0, 0);
-      } else if (undoStack.length === 1) {
-        const prevState = undoStack[0];
-        ctx.putImageData(prevState, 0, 0);
-      }
-    }
-
-    // Precise Relative Mouse Coordinates Calculation
-    function getMousePos(evt) {
-      const rect = canvas.getBoundingClientRect();
-      return {
-        x: (evt.clientX - rect.left) * (canvas.width / rect.width),
-        y: (evt.clientY - rect.top) * (canvas.height / rect.height)
-      };
-    }
-
-    // Draw pasted file on canvas node
-    function loadImage(src) {
-      const img = new Image();
-      img.onload = function() {
-        placeholder.classList.add('hidden');
-        canvasContainer.classList.remove('hidden');
-        
-        // Match canvas dimensions precisely to pasted asset dimensions
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
-        
-        undoStack = [];
+      if (selectedElement) {
+        selectedElement.size = parseInt(size);
         saveState();
-      };
-      img.src = src;
-    }
-
-    // File input event
-    function handleFileSelect(evt) {
-      const file = evt.target.files[0];
-      if (file && file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-          loadImage(e.target.result);
-        };
-        reader.readAsDataURL(file);
+        draw();
       }
     }
 
-    // Async clipboard paste listener
-    window.addEventListener('paste', function(e) {
-      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.kind === 'file' && item.type.startsWith('image/')) {
-          const blob = item.getAsFile();
-          const reader = new FileReader();
-          reader.onload = function(event) {
-            loadImage(event.target.result);
-          };
-          reader.readAsDataURL(blob);
-          e.preventDefault();
-          break;
+    // Geometry helpers
+    function distToSegment(p, v, w) {
+      let l2 = Math.hypot(v.x - w.x, v.y - w.y) ** 2;
+      if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+      let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+    }
+
+    function getBoxBounds(el) {
+      let x = Math.min(el.x, el.x + el.w);
+      let y = Math.min(el.y, el.y + el.h);
+      let w = Math.abs(el.w);
+      let h = Math.abs(el.h);
+      return { x, y, w, h };
+    }
+
+    function getTextBounds(el) {
+      ctx.save();
+      ctx.font = `bold ${el.size * 3}px sans-serif`;
+      let metrics = ctx.measureText(el.text);
+      let w = metrics.width;
+      let h = el.size * 3;
+      ctx.restore();
+      return { x: el.x, y: el.y, w, h };
+    }
+
+    function getPathBounds(el) {
+      if (el.points.length === 0) return { x: 0, y: 0, w: 0, h: 0 };
+      let minX = el.points[0].x;
+      let maxX = el.points[0].x;
+      let minY = el.points[0].y;
+      let maxY = el.points[0].y;
+      for (let i = 1; i < el.points.length; i++) {
+        let p = el.points[i];
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+
+    function getElementBounds(el) {
+      if (el.type === 'box' || el.type === 'dashed-box' || el.type === 'filled-box') {
+        return getBoxBounds(el);
+      } else if (el.type === 'text') {
+        return getTextBounds(el);
+      } else if (el.type === 'pencil' || el.type === 'highlighter') {
+        return getPathBounds(el);
+      } else if (el.type === 'arrow') {
+        let x = Math.min(el.x1, el.x2);
+        let y = Math.min(el.y1, el.y2);
+        let w = Math.abs(el.x2 - el.x1);
+        let h = Math.abs(el.y2 - el.y1);
+        return { x, y, w, h };
+      }
+      return { x: 0, y: 0, w: 0, h: 0 };
+    }
+
+    function getHandleAtPosition(el, mx, my) {
+      const tolerance = 10;
+      if (el.type === 'arrow') {
+        if (Math.hypot(mx - el.x1, my - el.y1) < tolerance) return 'start';
+        if (Math.hypot(mx - el.x2, my - el.y2) < tolerance) return 'end';
+      } else {
+        let bounds = getElementBounds(el);
+        let corners = [
+          { x: bounds.x - 4, y: bounds.y - 4, name: 'tl' },
+          { x: bounds.x + bounds.w + 4, y: bounds.y - 4, name: 'tr' },
+          { x: bounds.x - 4, y: bounds.y + bounds.h + 4, name: 'bl' },
+          { x: bounds.x + bounds.w + 4, y: bounds.y + bounds.h + 4, name: 'br' }
+        ];
+        for (let c of corners) {
+          if (Math.hypot(mx - c.x, my - c.y) < tolerance) {
+            if (el.type === 'text' && c.name !== 'br') continue;
+            return c.name;
+          }
         }
       }
-    });
+      return null;
+    }
 
-    // Helper: Draw Arrow Head Coordinates
+    function getElementAtPosition(mx, my) {
+      for (let i = elements.length - 1; i >= 0; i--) {
+        let el = elements[i];
+        if (el.type === 'box' || el.type === 'dashed-box' || el.type === 'filled-box') {
+          let bounds = getElementBounds(el);
+          if (mx >= bounds.x - 5 && mx <= bounds.x + bounds.w + 5 && my >= bounds.y - 5 && my <= bounds.y + bounds.h + 5) {
+            return el;
+          }
+        } else if (el.type === 'text') {
+          let bounds = getElementBounds(el);
+          if (mx >= bounds.x - 5 && mx <= bounds.x + bounds.w + 5 && my >= bounds.y - 5 && my <= bounds.y + bounds.h + 5) {
+            return el;
+          }
+        } else if (el.type === 'arrow') {
+          let dist = distToSegment({x: mx, y: my}, {x: el.x1, y: el.y1}, {x: el.x2, y: el.y2});
+          if (dist < 15) return el;
+        } else if (el.type === 'pencil' || el.type === 'highlighter') {
+          for (let p of el.points) {
+            if (Math.hypot(mx - p.x, my - p.y) < 15) return el;
+          }
+        }
+      }
+      return null;
+    }
+
+    // Drawing Arrow Head Coordinates
     function drawArrow(ctx, fromx, fromy, tox, toy, size) {
       const headlen = size * 3.5; 
       const dx = tox - fromx;
@@ -240,6 +304,186 @@
       ctx.fill();
     }
 
+    // Rendering pipeline
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (bgImage) {
+        ctx.drawImage(bgImage, 0, 0);
+      }
+      
+      elements.forEach(el => {
+        ctx.save();
+        if (el.type === 'pencil' || el.type === 'highlighter') {
+          if (el.points.length > 0) {
+            ctx.beginPath();
+            ctx.moveTo(el.points[0].x, el.points[0].y);
+            for (let i = 1; i < el.points.length; i++) {
+              ctx.lineTo(el.points[i].x, el.points[i].y);
+            }
+            ctx.strokeStyle = el.type === 'highlighter' ? el.color + '55' : el.color;
+            ctx.lineWidth = el.size;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+          }
+        } else if (el.type === 'arrow') {
+          ctx.strokeStyle = el.color;
+          ctx.lineWidth = el.size;
+          drawArrow(ctx, el.x1, el.y1, el.x2, el.y2, el.size);
+        } else if (el.type === 'box') {
+          ctx.strokeStyle = el.color;
+          ctx.lineWidth = el.size;
+          ctx.strokeRect(el.x, el.y, el.w, el.h);
+        } else if (el.type === 'dashed-box') {
+          ctx.strokeStyle = el.color;
+          ctx.lineWidth = el.size;
+          ctx.setLineDash([el.size * 2, el.size * 2]);
+          ctx.strokeRect(el.x, el.y, el.w, el.h);
+        } else if (el.type === 'filled-box') {
+          ctx.fillStyle = el.color;
+          ctx.fillRect(el.x, el.y, el.w, el.h);
+        } else if (el.type === 'text') {
+          ctx.fillStyle = el.color;
+          ctx.font = `bold ${el.size * 3}px sans-serif`;
+          ctx.textBaseline = 'top';
+          ctx.fillText(el.text, el.x, el.y);
+        }
+        ctx.restore();
+      });
+
+      if (selectedElement && currentTool === 'select') {
+        drawSelectionMarkup(ctx, selectedElement);
+      }
+    }
+
+    function drawSelectionMarkup(ctx, el) {
+      let bounds = getElementBounds(el);
+      ctx.save();
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(bounds.x - 4, bounds.y - 4, bounds.w + 8, bounds.h + 8);
+      ctx.restore();
+
+      const handleSize = 8;
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 2;
+      
+      if (el.type === 'arrow') {
+        drawHandle(ctx, el.x1, el.y1, handleSize);
+        drawHandle(ctx, el.x2, el.y2, handleSize);
+      } else if (el.type === 'text') {
+        drawHandle(ctx, bounds.x + bounds.w + 4, bounds.y + bounds.h + 4, handleSize);
+      } else {
+        let corners = [
+          { x: bounds.x - 4, y: bounds.y - 4 },
+          { x: bounds.x + bounds.w + 4, y: bounds.y - 4 },
+          { x: bounds.x - 4, y: bounds.y + bounds.h + 4 },
+          { x: bounds.x + bounds.w + 4, y: bounds.y + bounds.h + 4 }
+        ];
+        corners.forEach(c => drawHandle(ctx, c.x, c.y, handleSize));
+      }
+      ctx.restore();
+    }
+
+    function drawHandle(ctx, x, y, size) {
+      ctx.beginPath();
+      ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Precise Relative Mouse Coordinates Calculation
+    function getMousePos(evt) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (evt.clientX - rect.left) * (canvas.width / rect.width),
+        y: (evt.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    // State history Undo operations
+    function saveState() {
+      undoStack.push(JSON.parse(JSON.stringify(elements)));
+      if (undoStack.length > 50) undoStack.shift();
+    }
+
+    function undo() {
+      if (undoStack.length > 1) {
+        undoStack.pop();
+        elements = JSON.parse(JSON.stringify(undoStack[undoStack.length - 1]));
+        selectedElement = null;
+        draw();
+      } else if (undoStack.length === 1) {
+        elements = [];
+        selectedElement = null;
+        draw();
+      }
+    }
+
+    function deleteSelected() {
+      if (selectedElement) {
+        elements = elements.filter(el => el !== selectedElement);
+        selectedElement = null;
+        saveState();
+        draw();
+      } else {
+        alert("Select an element first using the 'Select' tool.");
+      }
+    }
+
+    // Load Image background
+    function loadImage(src) {
+      const img = new Image();
+      img.onload = function() {
+        bgImage = img;
+        placeholder.classList.add('hidden');
+        canvasContainer.classList.remove('hidden');
+        
+        canvas.width = img.width;
+        canvas.height = img.height;
+        elements = [];
+        selectedElement = null;
+        undoStack = [];
+        saveState();
+        draw();
+        setTool('select'); // Default to select mode for easy interaction
+      };
+      img.src = src;
+    }
+
+    // File input event
+    function handleFileSelect(evt) {
+      const file = evt.target.files[0];
+      if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          loadImage(e.target.result);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    // Clipboard paste event
+    window.addEventListener('paste', function(e) {
+      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          const reader = new FileReader();
+          reader.onload = function(event) {
+            loadImage(event.target.result);
+          };
+          reader.readAsDataURL(blob);
+          e.preventDefault();
+          break;
+        }
+      }
+    });
+
     // drag and drop listeners
     window.addEventListener('dragover', e => e.preventDefault());
     window.addEventListener('drop', e => {
@@ -254,80 +498,232 @@
       }
     });
 
-    // Canvas interactive draw lifecycle
+    // Keyboard Delete Event
+    window.addEventListener('keydown', function(e) {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedElement && currentTool === 'select') {
+          deleteSelected();
+        }
+      }
+    });
+
+    // Canvas interactivity & event cycle
     canvas.addEventListener('mousedown', function(e) {
-      if (undoStack.length === 0) return;
-      isDrawing = true;
+      if (!bgImage) return;
       const pos = getMousePos(e);
-      startX = pos.x;
-      startY = pos.y;
       
-      // Snapshot state to dynamic buffer for active drag shape rendering previews
-      snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      
-      if (currentTool === 'pencil' || currentTool === 'highlighter') {
-        ctx.beginPath();
-        ctx.moveTo(startX, startY);
-        ctx.strokeStyle = currentTool === 'highlighter' ? currentColor + '55' : currentColor;
-        ctx.lineWidth = currentBrushSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
+      if (currentTool === 'select') {
+        if (selectedElement) {
+          selectedHandle = getHandleAtPosition(selectedElement, pos.x, pos.y);
+        }
+        
+        if (selectedHandle) {
+          isDragging = true;
+          dragStartX = pos.x;
+          dragStartY = pos.y;
+          originalElementState = JSON.parse(JSON.stringify(selectedElement));
+        } else {
+          let clickedEl = getElementAtPosition(pos.x, pos.y);
+          if (clickedEl) {
+            selectedElement = clickedEl;
+            isDragging = true;
+            dragStartX = pos.x;
+            dragStartY = pos.y;
+            originalElementState = JSON.parse(JSON.stringify(selectedElement));
+            
+            // Sync config widgets with selected element properties
+            document.getElementById('colorPicker').value = selectedElement.color;
+            document.getElementById('brushSize').value = selectedElement.size;
+            document.getElementById('brushSizeVal').innerText = selectedElement.size;
+          } else {
+            selectedElement = null;
+          }
+        }
+        draw();
+      } else if (currentTool === 'text') {
+        let text = prompt("Enter annotation text:");
+        if (text) {
+          let newEl = {
+            type: 'text',
+            color: currentColor,
+            size: currentBrushSize,
+            x: pos.x,
+            y: pos.y,
+            text: text
+          };
+          elements.push(newEl);
+          selectedElement = newEl;
+          saveState();
+          draw();
+          setTool('select');
+        }
+      } else {
+        // Create draw vector element
+        isDrawing = true;
+        startX = pos.x;
+        startY = pos.y;
+        
+        let newEl;
+        if (currentTool === 'pencil' || currentTool === 'highlighter') {
+          newEl = {
+            type: currentTool,
+            color: currentColor,
+            size: currentBrushSize,
+            points: [{ x: pos.x, y: pos.y }]
+          };
+        } else if (currentTool === 'arrow') {
+          newEl = {
+            type: 'arrow',
+            color: currentColor,
+            size: currentBrushSize,
+            x1: pos.x,
+            y1: pos.y,
+            x2: pos.x,
+            y2: pos.y
+          };
+        } else if (currentTool === 'box' || currentTool === 'dashed-box' || currentTool === 'filled-box') {
+          newEl = {
+            type: currentTool,
+            color: currentColor,
+            size: currentBrushSize,
+            x: pos.x,
+            y: pos.y,
+            w: 0,
+            h: 0
+          };
+        }
+        
+        if (newEl) {
+          elements.push(newEl);
+          selectedElement = newEl;
+          draw();
+        }
       }
     });
 
     canvas.addEventListener('mousemove', function(e) {
-      if (!isDrawing) return;
       const pos = getMousePos(e);
-      const curX = pos.x;
-      const curY = pos.y;
-
-      if (currentTool === 'pencil' || currentTool === 'highlighter') {
-        ctx.lineTo(curX, curY);
-        ctx.stroke();
-      } else {
-        // Redraw buffered snapshot state to erase current dragging preview vector lines
-        ctx.putImageData(snapshot, 0, 0);
-        ctx.strokeStyle = currentColor;
-        ctx.lineWidth = currentBrushSize;
-        ctx.setLineDash([]); 
-        
-        if (currentTool === 'arrow') {
-          drawArrow(ctx, startX, startY, curX, curY, currentBrushSize);
-        } else if (currentTool === 'box') {
-          ctx.strokeRect(startX, startY, curX - startX, curY - startY);
-        } else if (currentTool === 'dashed-box') {
-          ctx.setLineDash([currentBrushSize * 2, currentBrushSize * 2]);
-          ctx.strokeRect(startX, startY, curX - startX, curY - startY);
-          ctx.setLineDash([]);
-        } else if (currentTool === 'filled-box') {
-          ctx.fillStyle = currentColor;
-          ctx.fillRect(startX, startY, curX - startX, curY - startY);
+      
+      if (isDrawing && selectedElement) {
+        if (selectedElement.type === 'pencil' || selectedElement.type === 'highlighter') {
+          selectedElement.points.push({ x: pos.x, y: pos.y });
+        } else if (selectedElement.type === 'arrow') {
+          selectedElement.x2 = pos.x;
+          selectedElement.y2 = pos.y;
+        } else if (selectedElement.type === 'box' || selectedElement.type === 'dashed-box' || selectedElement.type === 'filled-box') {
+          selectedElement.w = pos.x - startX;
+          selectedElement.h = pos.y - startY;
         }
+        draw();
+      } else if (isDragging && selectedElement) {
+        let dx = pos.x - dragStartX;
+        let dy = pos.y - dragStartY;
+        
+        if (selectedHandle) {
+          // Resize interaction
+          if (selectedElement.type === 'arrow') {
+            if (selectedHandle === 'start') {
+              selectedElement.x1 = originalElementState.x1 + dx;
+              selectedElement.y1 = originalElementState.y1 + dy;
+            } else if (selectedHandle === 'end') {
+              selectedElement.x2 = originalElementState.x2 + dx;
+              selectedElement.y2 = originalElementState.y2 + dy;
+            }
+          } else if (selectedElement.type === 'pencil' || selectedElement.type === 'highlighter') {
+            let b = getPathBounds(originalElementState);
+            if (b.w > 0 && b.h > 0) {
+              let sx = 1, sy = 1, ax = b.x, ay = b.y;
+              if (selectedHandle === 'br') {
+                sx = (b.w + dx) / b.w;
+                sy = (b.h + dy) / b.h;
+                ax = b.x; ay = b.y;
+              } else if (selectedHandle === 'tl') {
+                sx = (b.w - dx) / b.w;
+                sy = (b.h - dy) / b.h;
+                ax = b.x + b.w; ay = b.y + b.h;
+              } else if (selectedHandle === 'tr') {
+                sx = (b.w + dx) / b.w;
+                sy = (b.h - dy) / b.h;
+                ax = b.x; ay = b.y + b.h;
+              } else if (selectedHandle === 'bl') {
+                sx = (b.w - dx) / b.w;
+                sy = (b.h + dy) / b.h;
+                ax = b.x + b.w; ay = b.y;
+              }
+              selectedElement.points = originalElementState.points.map(p => ({
+                x: ax + (p.x - ax) * sx,
+                y: ay + (p.y - ay) * sy
+              }));
+            }
+          } else if (selectedElement.type === 'text') {
+            let b = getTextBounds(originalElementState);
+            if (b.w > 0) {
+              let scale = (b.w + dx) / b.w;
+              selectedElement.size = Math.max(2, Math.round(originalElementState.size * scale));
+            }
+          } else {
+            // Boxes
+            if (selectedHandle === 'br') {
+              selectedElement.w = originalElementState.w + dx;
+              selectedElement.h = originalElementState.h + dy;
+            } else if (selectedHandle === 'tl') {
+              selectedElement.x = originalElementState.x + dx;
+              selectedElement.y = originalElementState.y + dy;
+              selectedElement.w = originalElementState.w - dx;
+              selectedElement.h = originalElementState.h - dy;
+            } else if (selectedHandle === 'tr') {
+              selectedElement.y = originalElementState.y + dy;
+              selectedElement.w = originalElementState.w + dx;
+              selectedElement.h = originalElementState.h - dy;
+            } else if (selectedHandle === 'bl') {
+              selectedElement.x = originalElementState.x + dx;
+              selectedElement.w = originalElementState.w - dx;
+              selectedElement.h = originalElementState.h + dy;
+            }
+          }
+        } else {
+          // Move interaction
+          if (selectedElement.type === 'arrow') {
+            selectedElement.x1 = originalElementState.x1 + dx;
+            selectedElement.y1 = originalElementState.y1 + dy;
+            selectedElement.x2 = originalElementState.x2 + dx;
+            selectedElement.y2 = originalElementState.y2 + dy;
+          } else if (selectedElement.type === 'pencil' || selectedElement.type === 'highlighter') {
+            selectedElement.points = originalElementState.points.map(p => ({
+              x: p.x + dx,
+              y: p.y + dy
+            }));
+          } else {
+            selectedElement.x = originalElementState.x + dx;
+            selectedElement.y = originalElementState.y + dy;
+          }
+        }
+        draw();
       }
     });
 
     canvas.addEventListener('mouseup', function(e) {
-      if (!isDrawing) return;
-      isDrawing = false;
-      const pos = getMousePos(e);
-      
-      if (currentTool === 'text') {
-        ctx.putImageData(snapshot, 0, 0);
-        const text = prompt("Enter annotation text:");
-        if (text) {
-          ctx.fillStyle = currentColor;
-          ctx.font = `bold ${currentBrushSize * 3}px sans-serif`;
-          ctx.fillText(text, pos.x, pos.y);
-          saveState();
-        }
-      } else {
+      if (isDrawing) {
+        isDrawing = false;
         saveState();
+        draw();
+        // Automatically switch back to select tool so they can move/resize what they just drew!
+        setTool('select');
+      }
+      if (isDragging) {
+        isDragging = false;
+        selectedHandle = null;
+        saveState();
+        draw();
       }
     });
 
     // Exporters
     function copyToClipboard() {
-      if (undoStack.length === 0) return alert("Canvas is empty. Paste an image first.");
+      if (elements.length === 0 && !bgImage) return alert("Canvas is empty. Paste an image first.");
+      
+      selectedElement = null; // Unselect before rendering so border is not copied
+      draw();
       
       canvas.toBlob(function(blob) {
         if (!blob) return alert("Error processing image.");
@@ -347,7 +743,10 @@
     }
 
     function saveToLocal() {
-      if (undoStack.length === 0) return alert("Canvas is empty. Paste an image first.");
+      if (elements.length === 0 && !bgImage) return alert("Canvas is empty. Paste an image first.");
+      
+      selectedElement = null; // Unselect before saving
+      draw();
       
       const link = document.createElement('a');
       link.download = `clipmarkup-${Date.now()}.png`;
@@ -359,6 +758,9 @@
       if (confirm("Reset layout? All changes on current image will be dropped.")) {
         canvasContainer.classList.add('hidden');
         placeholder.classList.remove('hidden');
+        bgImage = null;
+        elements = [];
+        selectedElement = null;
         undoStack = [];
         ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
