@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClipMarkup - Clipboard Image Editor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background-color: #0f172a;
+    }
+  </style>
+</head>
+<body class="text-white min-h-screen flex flex-col">
+  <!-- Top Navbar -->
+  <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <span class="text-2xl">🎨</span>
+      <h1 class="text-lg font-bold tracking-tight text-indigo-400">ClipMarkup</h1>
+    </div>
+    
+    <!-- Toolbar -->
+    <div class="flex flex-wrap items-center gap-2">
+      <!-- Tools Selector -->
+      <div class="bg-slate-900 p-1 rounded-lg flex gap-1 border border-slate-700">
+        <button id="btn-pencil" class="tool-btn px-3 py-1.5 rounded-md text-sm bg-indigo-600 hover:bg-indigo-700 font-medium flex items-center gap-1" onclick="setTool('pencil')">
+          <span>✏️</span> <span class="hidden md:inline">Pencil</span>
+        </button>
+        <button id="btn-highlighter" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('highlighter')">
+          <span>🖌️</span> <span class="hidden md:inline">Highlighter</span>
+        </button>
+        <button id="btn-arrow" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('arrow')">
+          <span>➡️</span> <span class="hidden md:inline">Arrow</span>
+        </button>
+        <button id="btn-box" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('box')">
+          <span>⬜</span> <span class="hidden md:inline">Box</span>
+        </button>
+        <button id="btn-dashed-box" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('dashed-box')">
+          <span>░</span> <span class="hidden md:inline">Dashed</span>
+        </button>
+        <button id="btn-filled-box" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('filled-box')">
+          <span>█</span> <span class="hidden md:inline">Filled</span>
+        </button>
+        <button id="btn-text" class="tool-btn px-3 py-1.5 rounded-md text-sm hover:bg-slate-800 font-medium flex items-center gap-1" onclick="setTool('text')">
+          <span>🔤</span> <span class="hidden md:inline">Text</span>
+        </button>
+      </div>
+
+      <!-- Configurations -->
+      <div class="flex items-center gap-3 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-700">
+        <div class="flex items-center gap-1.5">
+          <label for="colorPicker" class="text-xs text-slate-400 font-semibold">Color:</label>
+          <input type="color" id="colorPicker" value="#ff0000" class="w-8 h-8 rounded cursor-pointer bg-transparent border-0" onchange="setColor(this.value)">
+        </div>
+        <div class="h-6 w-px bg-slate-700"></div>
+        <div class="flex items-center gap-1.5">
+          <label for="brushSize" class="text-xs text-slate-400 font-semibold">Size:</label>
+          <input type="range" id="brushSize" min="2" max="50" value="6" class="w-20 accent-indigo-500 cursor-pointer" oninput="setBrushSize(this.value)">
+          <span id="brushSizeVal" class="text-xs text-slate-300 w-4 text-center">6</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Global Actions -->
+    <div class="flex items-center gap-2">
+      <button onclick="undo()" class="px-3 py-1.5 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 font-medium flex items-center gap-1.5" title="Undo Last Change">
+        <span>↩️</span> Undo
+      </button>
+      <button onclick="copyToClipboard()" class="px-3 py-1.5 rounded-lg text-sm bg-emerald-600 hover:bg-emerald-500 font-medium flex items-center gap-1.5" title="Copy to Clipboard">
+        <span>📋</span> Copy
+      </button>
+      <button onclick="saveToLocal()" class="px-3 py-1.5 rounded-lg text-sm bg-sky-600 hover:bg-sky-500 font-medium flex items-center gap-1.5" title="Save to Local">
+        <span>💾</span> Save
+      </button>
+      <button onclick="resetCanvas()" class="px-3 py-1.5 rounded-lg text-sm bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 font-medium flex items-center gap-1" title="Clear Canvas">
+        <span>❌</span> Clear
+      </button>
+    </div>
+  </header>
+
+  <!-- Canvas Container Workspace -->
+  <main class="flex-1 flex flex-col items-center justify-center p-6 overflow-auto relative">
+    <!-- Welcome Screen / Placeholder File Dropzone -->
+    <div id="placeholder" class="max-w-md w-full bg-slate-800 rounded-2xl border border-slate-700 p-8 text-center shadow-2xl transition-all duration-300">
+      <div class="w-20 h-20 bg-indigo-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+        <span class="text-4xl text-indigo-400">📋</span>
+      </div>
+      <h2 class="text-xl font-bold mb-2">Paste or Upload an Image</h2>
+      <p class="text-slate-400 text-sm mb-6 leading-relaxed">
+        Copy any image or take a screenshot, then press <kbd class="px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-xs font-semibold">Ctrl + V</kbd> (or <kbd class="px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-xs font-semibold">Cmd + V</kbd>) on this window to load it instantly.
+      </p>
+      
+      <div class="relative group border-2 border-dashed border-slate-600 hover:border-indigo-500 rounded-xl p-6 transition-all duration-300 bg-slate-900/50 cursor-pointer">
+        <input type="file" id="fileInput" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onchange="handleFileSelect(event)">
+        <span class="text-sm font-semibold text-indigo-400 group-hover:text-indigo-300">Or browse local files</span>
+        <p class="text-xs text-slate-500 mt-1">Supports PNG, JPG, WEBP, BMP</p>
+      </div>
+    </div>
+
+    <!-- Target Canvas Node -->
+    <div id="canvas-container" class="hidden relative max-w-full max-h-[80vh] border border-slate-700 rounded-lg overflow-auto shadow-2xl bg-[#1e293b]">
+      <canvas id="canvas" class="block cursor-crosshair mx-auto"></canvas>
+    </div>
+  </main>
+
+  <footer class="bg-slate-900 border-t border-slate-800 py-3 text-center text-xs text-slate-500">
+    ClipMarkup Self-Hosted Image Editor &copy; 2026. Operates entirely client-side. No files are uploaded to any server.
+  </footer>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const placeholder = document.getElementById('placeholder');
+    const canvasContainer = document.getElementById('canvas-container');
+    
+    let isDrawing = false;
+    let startX = 0, startY = 0;
+    let currentTool = 'pencil';
+    let currentColor = '#ff0000';
+    let currentBrushSize = 6;
+    
+    let undoStack = [];
+    let snapshot = null; 
+
+    // Handle Active Tool States
+    function setTool(toolName) {
+      currentTool = toolName;
+      document.querySelectorAll('.tool-btn').forEach(btn => {
+        btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+        btn.classList.add('hover:bg-slate-800');
+      });
+      const activeBtn = document.getElementById(`btn-${toolName}`);
+      if (activeBtn) {
+        activeBtn.classList.remove('hover:bg-slate-800');
+        activeBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+      }
+    }
+
+    function setColor(colorHex) {
+      currentColor = colorHex;
+    }
+
+    function setBrushSize(size) {
+      currentBrushSize = parseInt(size);
+      document.getElementById('brushSizeVal').innerText = size;
+    }
+
+    // Canvas Undo Operations
+    function saveState() {
+      undoStack.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      if (undoStack.length > 30) undoStack.shift(); // Limit undo stack history
+    }
+
+    function undo() {
+      if (undoStack.length > 1) {
+        undoStack.pop(); 
+        const prevState = undoStack[undoStack.length - 1];
+        ctx.putImageData(prevState, 0, 0);
+      } else if (undoStack.length === 1) {
+        const prevState = undoStack[0];
+        ctx.putImageData(prevState, 0, 0);
+      }
+    }
+
+    // Precise Relative Mouse Coordinates Calculation
+    function getMousePos(evt) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (evt.clientX - rect.left) * (canvas.width / rect.width),
+        y: (evt.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    // Draw pasted file on canvas node
+    function loadImage(src) {
+      const img = new Image();
+      img.onload = function() {
+        placeholder.classList.add('hidden');
+        canvasContainer.classList.remove('hidden');
+        
+        // Match canvas dimensions precisely to pasted asset dimensions
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        
+        undoStack = [];
+        saveState();
+      };
+      img.src = src;
+    }
+
+    // File input event
+    function handleFileSelect(evt) {
+      const file = evt.target.files[0];
+      if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          loadImage(e.target.result);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    // Async clipboard paste listener
+    window.addEventListener('paste', function(e) {
+      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          const reader = new FileReader();
+          reader.onload = function(event) {
+            loadImage(event.target.result);
+          };
+          reader.readAsDataURL(blob);
+          e.preventDefault();
+          break;
+        }
+      }
+    });
+
+    // Helper: Draw Arrow Head Coordinates
+    function drawArrow(ctx, fromx, fromy, tox, toy, size) {
+      const headlen = size * 3.5; 
+      const dx = tox - fromx;
+      const dy = toy - fromy;
+      const angle = Math.atan2(dy, dx);
+      ctx.beginPath();
+      ctx.moveTo(fromx, fromy);
+      ctx.lineTo(tox, toy);
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.moveTo(tox, toy);
+      ctx.lineTo(tox - headlen * Math.cos(angle - Math.PI / 6), toy - headlen * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(tox - headlen * Math.cos(angle + Math.PI / 6), toy - headlen * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fill();
+    }
+
+    // drag and drop listeners
+    window.addEventListener('dragover', e => e.preventDefault());
+    window.addEventListener('drop', e => {
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+      if (files.length > 0 && files[0].type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = function(event) {
+          loadImage(event.target.result);
+        };
+        reader.readAsDataURL(files[0]);
+      }
+    });
+
+    // Canvas interactive draw lifecycle
+    canvas.addEventListener('mousedown', function(e) {
+      if (undoStack.length === 0) return;
+      isDrawing = true;
+      const pos = getMousePos(e);
+      startX = pos.x;
+      startY = pos.y;
+      
+      // Snapshot state to dynamic buffer for active drag shape rendering previews
+      snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      
+      if (currentTool === 'pencil' || currentTool === 'highlighter') {
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.strokeStyle = currentTool === 'highlighter' ? currentColor + '55' : currentColor;
+        ctx.lineWidth = currentBrushSize;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+      }
+    });
+
+    canvas.addEventListener('mousemove', function(e) {
+      if (!isDrawing) return;
+      const pos = getMousePos(e);
+      const curX = pos.x;
+      const curY = pos.y;
+
+      if (currentTool === 'pencil' || currentTool === 'highlighter') {
+        ctx.lineTo(curX, curY);
+        ctx.stroke();
+      } else {
+        // Redraw buffered snapshot state to erase current dragging preview vector lines
+        ctx.putImageData(snapshot, 0, 0);
+        ctx.strokeStyle = currentColor;
+        ctx.lineWidth = currentBrushSize;
+        ctx.setLineDash([]); 
+        
+        if (currentTool === 'arrow') {
+          drawArrow(ctx, startX, startY, curX, curY, currentBrushSize);
+        } else if (currentTool === 'box') {
+          ctx.strokeRect(startX, startY, curX - startX, curY - startY);
+        } else if (currentTool === 'dashed-box') {
+          ctx.setLineDash([currentBrushSize * 2, currentBrushSize * 2]);
+          ctx.strokeRect(startX, startY, curX - startX, curY - startY);
+          ctx.setLineDash([]);
+        } else if (currentTool === 'filled-box') {
+          ctx.fillStyle = currentColor;
+          ctx.fillRect(startX, startY, curX - startX, curY - startY);
+        }
+      }
+    });
+
+    canvas.addEventListener('mouseup', function(e) {
+      if (!isDrawing) return;
+      isDrawing = false;
+      const pos = getMousePos(e);
+      
+      if (currentTool === 'text') {
+        ctx.putImageData(snapshot, 0, 0);
+        const text = prompt("Enter annotation text:");
+        if (text) {
+          ctx.fillStyle = currentColor;
+          ctx.font = `bold ${currentBrushSize * 3}px sans-serif`;
+          ctx.fillText(text, pos.x, pos.y);
+          saveState();
+        }
+      } else {
+        saveState();
+      }
+    });
+
+    // Exporters
+    function copyToClipboard() {
+      if (undoStack.length === 0) return alert("Canvas is empty. Paste an image first.");
+      
+      canvas.toBlob(function(blob) {
+        if (!blob) return alert("Error processing image.");
+        try {
+          const item = new ClipboardItem({ "image/png": blob });
+          navigator.clipboard.write([item]).then(() => {
+            alert("✅ Copy successful! The annotated image is in your clipboard.");
+          }).catch(err => {
+            console.error(err);
+            alert("❌ Browser blocked copy: Ensure you are serving via localhost or HTTPS.");
+          });
+        } catch (e) {
+          console.error(e);
+          alert("❌ Clipboard write failed. Please try saving locally instead.");
+        }
+      }, "image/png");
+    }
+
+    function saveToLocal() {
+      if (undoStack.length === 0) return alert("Canvas is empty. Paste an image first.");
+      
+      const link = document.createElement('a');
+      link.download = `clipmarkup-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    function resetCanvas() {
+      if (confirm("Reset layout? All changes on current image will be dropped.")) {
+        canvasContainer.classList.add('hidden');
+        placeholder.classList.remove('hidden');
+        undoStack = [];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+services:
+  clipmarkup:
+    build: .
+    container_name: clipmarkup-service
+    ports:
+      - "8084:80"
+    restart: unless-stopped
